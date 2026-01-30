@@ -289,6 +289,10 @@ function getDrizzleUsersSchema(database: Database, nm: NameMapper, opts: SchemaO
  * This file contains the User model. Extend it with your app-specific fields.
  * The auth system will use this model for user management.
  *
+ * IMPORTANT: Do not remove or rename the existing fields (id, email, emailVerified,
+ * name, image, createdAt, updatedAt). The auth system depends on these fields.
+ * You may add new fields below the existing ones.
+ *
  * Generated for: ${database} with Drizzle ORM
  */
 
@@ -403,6 +407,10 @@ function getPrismaUsersSchema(database: Database, nm: NameMapper, opts: SchemaOp
 //
 // This file contains the User model. Extend it with your app-specific fields.
 // The auth system will use this model for user management.
+//
+// IMPORTANT: Do not remove or rename the existing fields (id, email, emailVerified,
+// name, image, createdAt, updatedAt). The auth system depends on these fields.
+// You may add new fields below the existing ones.
 //
 // Generated for: ${database}
 
