@@ -5,48 +5,100 @@
  * Usage:
  *   npx @sveltekit-auth/core init
  *   npx @sveltekit-auth/core init --database postgres
- *   npx @sveltekit-auth/core init --database mysql --orm drizzle
+ *   npx @sveltekit-auth/core init --tables snake --columns snake
  */
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 
 type Database = 'postgres' | 'mysql' | 'sqlite';
 type ORM = 'drizzle' | 'prisma';
+type Casing = 'snake' | 'camel' | 'pascal';
 
 interface InitOptions {
   database: Database;
   orm: ORM;
   outputDir: string;
+  tableCasing: Casing;
+  columnCasing: Casing;
+  pluralTables: boolean;
+  force: boolean;
 }
-
-const SCHEMA_TEMPLATES: Record<ORM, Record<Database, string>> = {
-  drizzle: {
-    postgres: 'drizzle-pg.ts',
-    mysql: 'drizzle-mysql.ts',
-    sqlite: 'drizzle-sqlite.ts'
-  },
-  prisma: {
-    postgres: 'prisma.prisma',
-    mysql: 'prisma.prisma',
-    sqlite: 'prisma.prisma'
-  }
-};
 
 const DEFAULT_OUTPUT: Record<ORM, string> = {
   drizzle: 'src/lib/server/schemas/auth.ts',
   prisma: 'prisma/schema/auth.prisma'
 };
 
+// =============================================================================
+// Naming Utilities
+// =============================================================================
+
+function toSnakeCase(str: string): string {
+  return str.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+}
+
+function toCamelCase(str: string): string {
+  return str.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+}
+
+function toPascalCase(str: string): string {
+  const camel = toCamelCase(str);
+  return camel.charAt(0).toUpperCase() + camel.slice(1);
+}
+
+function pluralize(str: string): string {
+  if (str.endsWith('s') || str.endsWith('x') || str.endsWith('ch') || str.endsWith('sh')) {
+    return str + 'es';
+  }
+  if (str.endsWith('y') && !['a', 'e', 'i', 'o', 'u'].includes(str[str.length - 2])) {
+    return str.slice(0, -1) + 'ies';
+  }
+  return str + 's';
+}
+
+function applyCasing(str: string, casing: Casing): string {
+  switch (casing) {
+    case 'snake': return toSnakeCase(str);
+    case 'camel': return toCamelCase(str);
+    case 'pascal': return toPascalCase(str);
+    default: return str;
+  }
+}
+
+interface NameMapper {
+  table(name: string): string;
+  column(name: string): string;
+}
+
+function createNameMapper(options: InitOptions): NameMapper {
+  return {
+    table(name: string): string {
+      let result = name;
+      if (options.pluralTables) {
+        result = pluralize(result);
+      }
+      return applyCasing(result, options.tableCasing);
+    },
+    column(name: string): string {
+      return applyCasing(name, options.columnCasing);
+    }
+  };
+}
+
+// =============================================================================
+// Argument Parsing
+// =============================================================================
+
 function parseArgs(args: string[]): InitOptions {
   const options: InitOptions = {
     database: 'postgres',
     orm: 'drizzle',
-    outputDir: ''
+    outputDir: '',
+    tableCasing: 'snake',
+    columnCasing: 'snake',
+    pluralTables: true,
+    force: false
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -62,18 +114,41 @@ function parseArgs(args: string[]): InitOptions {
         }
         break;
       case '--orm':
-      case '-o':
         if (next && ['drizzle', 'prisma'].includes(next)) {
           options.orm = next as ORM;
           i++;
         }
         break;
       case '--output':
-      case '-O':
+      case '-o':
         if (next) {
           options.outputDir = next;
           i++;
         }
+        break;
+      case '--tables':
+      case '-t':
+        if (next && ['snake', 'camel', 'pascal'].includes(next)) {
+          options.tableCasing = next as Casing;
+          i++;
+        }
+        break;
+      case '--columns':
+      case '-c':
+        if (next && ['snake', 'camel', 'pascal'].includes(next)) {
+          options.columnCasing = next as Casing;
+          i++;
+        }
+        break;
+      case '--plural':
+        options.pluralTables = true;
+        break;
+      case '--singular':
+        options.pluralTables = false;
+        break;
+      case '--force':
+      case '-f':
+        options.force = true;
         break;
     }
   }
@@ -85,24 +160,11 @@ function parseArgs(args: string[]): InitOptions {
   return options;
 }
 
-function getSchemaContent(orm: ORM, database: Database): string {
-  const templateFile = SCHEMA_TEMPLATES[orm][database];
-  const templatePath = join(__dirname, '..', 'lib', 'adapters', 'schema', templateFile);
+// =============================================================================
+// Schema Generators
+// =============================================================================
 
-  // Try to read from the installed package location
-  if (existsSync(templatePath)) {
-    return readFileSync(templatePath, 'utf-8');
-  }
-
-  // Fallback: generate inline
-  if (orm === 'drizzle') {
-    return getDrizzleSchema(database);
-  } else {
-    return getPrismaSchema(database);
-  }
-}
-
-function getDrizzleSchema(database: Database): string {
+function getDrizzleSchema(database: Database, nm: NameMapper): string {
   const imports = {
     postgres: `import { pgTable, text, timestamp, integer, primaryKey, uniqueIndex } from 'drizzle-orm/pg-core';`,
     mysql: `import { mysqlTable, varchar, text, timestamp, int, primaryKey, uniqueIndex } from 'drizzle-orm/mysql-core';`,
@@ -115,70 +177,95 @@ function getDrizzleSchema(database: Database): string {
     sqlite: 'sqliteTable'
   };
 
-  const idType = {
-    postgres: `text('id').primaryKey().$defaultFn(() => crypto.randomUUID())`,
-    mysql: `varchar('id', { length: 36 }).primaryKey().$defaultFn(() => crypto.randomUUID())`,
-    sqlite: `text('id').primaryKey().$defaultFn(() => crypto.randomUUID())`
+  const textType = database === 'mysql' ? `varchar` : 'text';
+  const intType = database === 'mysql' ? 'int' : 'integer';
+  const idDef = database === 'mysql'
+    ? `${textType}('${nm.column('id')}', { length: 36 }).primaryKey().$defaultFn(() => crypto.randomUUID())`
+    : `text('${nm.column('id')}').primaryKey().$defaultFn(() => crypto.randomUUID())`;
+
+  const timestampDef = (col: string) => {
+    if (database === 'sqlite') {
+      return `integer('${nm.column(col)}', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date())`;
+    }
+    return `timestamp('${nm.column(col)}', { mode: 'date' }).defaultNow().notNull()`;
   };
 
-  const timestampType = {
-    postgres: `timestamp('created_at', { mode: 'date' }).defaultNow().notNull()`,
-    mysql: `timestamp('created_at', { mode: 'date' }).defaultNow().notNull()`,
-    sqlite: `integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date())`
+  const nullableTimestamp = (col: string) => {
+    if (database === 'sqlite') {
+      return `integer('${nm.column(col)}', { mode: 'timestamp' })`;
+    }
+    return `timestamp('${nm.column(col)}', { mode: 'date' })`;
+  };
+
+  const expiresTimestamp = (col: string) => {
+    if (database === 'sqlite') {
+      return `integer('${nm.column(col)}', { mode: 'timestamp' }).notNull()`;
+    }
+    return `timestamp('${nm.column(col)}', { mode: 'date' }).notNull()`;
+  };
+
+  const textCol = (col: string, extra = '') => {
+    if (database === 'mysql' && ['id', 'userId', 'provider', 'tokenType'].includes(col)) {
+      return `varchar('${nm.column(col)}', { length: 255 })${extra}`;
+    }
+    return `text('${nm.column(col)}')${extra}`;
   };
 
   return `/**
  * SvelteKit Auth - Database Schema
  *
  * Generated for: ${database} with Drizzle ORM
+ * Table casing: ${nm.table('user')} (from 'user')
+ * Column casing: ${nm.column('userId')} (from 'userId')
+ *
  * Modify this file as needed, then run migrations.
  */
 
 ${imports[database]}
 
-export const users = ${tableFunc[database]}('user', {
-  ${idType[database]},
-  email: text('email').notNull(),
-  emailVerified: ${database === 'sqlite' ? `integer('email_verified', { mode: 'timestamp' })` : `timestamp('email_verified', { mode: 'date' })`},
-  name: text('name'),
-  image: text('image'),
-  ${timestampType[database]},
-  ${timestampType[database].replace('created_at', 'updated_at')}
+export const users = ${tableFunc[database]}('${nm.table('user')}', {
+  ${idDef},
+  ${textCol('email', '.notNull()')},
+  ${nullableTimestamp('emailVerified')},
+  ${textCol('name')},
+  ${textCol('image')},
+  ${timestampDef('createdAt')},
+  ${timestampDef('updatedAt')}
 }, (table) => [
-  uniqueIndex('user_email_idx').on(table.email)
+  uniqueIndex('${nm.table('user')}_email_idx').on(table.email)
 ]);
 
-export const accounts = ${tableFunc[database]}('account', {
-  ${idType[database]},
-  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  type: text('type').$type<'oauth' | 'credentials' | 'email'>().notNull(),
-  provider: text('provider').notNull(),
-  providerAccountId: text('provider_account_id').notNull(),
-  refreshToken: text('refresh_token'),
-  accessToken: text('access_token'),
-  expiresAt: integer('expires_at'),
-  tokenType: text('token_type'),
-  scope: text('scope'),
-  idToken: text('id_token'),
-  ${timestampType[database]},
-  ${timestampType[database].replace('created_at', 'updated_at')}
+export const accounts = ${tableFunc[database]}('${nm.table('account')}', {
+  ${idDef},
+  ${textCol('userId', `.notNull().references(() => users.id, { onDelete: 'cascade' })`)},
+  ${textCol('type', `.$type<'oauth' | 'credentials' | 'email'>().notNull()`)},
+  ${textCol('provider', '.notNull()')},
+  ${textCol('providerAccountId', '.notNull()')},
+  ${textCol('refreshToken')},
+  ${textCol('accessToken')},
+  ${intType}('${nm.column('expiresAt')}'),
+  ${textCol('tokenType')},
+  ${textCol('scope')},
+  ${textCol('idToken')},
+  ${timestampDef('createdAt')},
+  ${timestampDef('updatedAt')}
 }, (table) => [
-  uniqueIndex('account_provider_idx').on(table.provider, table.providerAccountId)
+  uniqueIndex('${nm.table('account')}_provider_idx').on(table.provider, table.providerAccountId)
 ]);
 
-export const sessions = ${tableFunc[database]}('session', {
-  ${idType[database]},
-  sessionToken: text('session_token').notNull().unique(),
-  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  expires: ${database === 'sqlite' ? `integer('expires', { mode: 'timestamp' }).notNull()` : `timestamp('expires', { mode: 'date' }).notNull()`},
-  ${timestampType[database]},
-  ${timestampType[database].replace('created_at', 'updated_at')}
+export const sessions = ${tableFunc[database]}('${nm.table('session')}', {
+  ${idDef},
+  ${textCol('sessionToken', '.notNull().unique()')},
+  ${textCol('userId', `.notNull().references(() => users.id, { onDelete: 'cascade' })`)},
+  ${expiresTimestamp('expires')},
+  ${timestampDef('createdAt')},
+  ${timestampDef('updatedAt')}
 });
 
-export const verificationTokens = ${tableFunc[database]}('verification_token', {
-  identifier: text('identifier').notNull(),
-  token: text('token').notNull().unique(),
-  expires: ${database === 'sqlite' ? `integer('expires', { mode: 'timestamp' }).notNull()` : `timestamp('expires', { mode: 'date' }).notNull()`}
+export const verificationTokens = ${tableFunc[database]}('${nm.table('verificationToken')}', {
+  ${textCol('identifier', '.notNull()')},
+  ${textCol('token', '.notNull().unique()')},
+  ${expiresTimestamp('expires')}
 }, (table) => [
   primaryKey({ columns: [table.identifier, table.token] })
 ]);
@@ -195,16 +282,35 @@ export type NewVerificationToken = typeof verificationTokens.$inferInsert;
 `;
 }
 
-function getPrismaSchema(database: Database): string {
+function getPrismaSchema(database: Database, nm: NameMapper): string {
   const datasource = {
     postgres: 'postgresql',
     mysql: 'mysql',
     sqlite: 'sqlite'
   };
 
+  const dbText = database !== 'sqlite' ? ' @db.Text' : '';
+
+  // For Prisma, model names are always PascalCase in code
+  // We use @@map() to set the actual DB table name
+  // And @map() for column names
+
+  const mapCol = (tsName: string) => {
+    const dbName = nm.column(tsName);
+    return dbName !== tsName ? ` @map("${dbName}")` : '';
+  };
+
+  const mapTable = (tsName: string) => {
+    const dbName = nm.table(tsName);
+    return `  @@map("${dbName}")`;
+  };
+
   return `// SvelteKit Auth - Prisma Schema
 //
 // Generated for: ${database}
+// Table casing: ${nm.table('user')} (from 'user')
+// Column casing: ${nm.column('userId')} (from 'userId')
+//
 // Copy these models to your schema.prisma file, then run:
 //   npx prisma migrate dev
 
@@ -215,72 +321,79 @@ function getPrismaSchema(database: Database): string {
 // }
 
 model User {
-  id            String    @id @default(uuid())
-  email         String    @unique
-  emailVerified DateTime? @map("email_verified")
-  name          String?
-  image         String?
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
+  id            String    @id @default(uuid())${mapCol('id')}
+  email         String    @unique${mapCol('email')}
+  emailVerified DateTime?${mapCol('emailVerified')}
+  name          String?${mapCol('name')}
+  image         String?${mapCol('image')}
+  createdAt     DateTime  @default(now())${mapCol('createdAt')}
+  updatedAt     DateTime  @updatedAt${mapCol('updatedAt')}
 
   accounts Account[]
   sessions Session[]
 
-  @@map("user")
+${mapTable('user')}
 }
 
 model Account {
-  id                String   @id @default(uuid())
-  userId            String   @map("user_id")
-  type              String
-  provider          String
-  providerAccountId String   @map("provider_account_id")
-  refreshToken      String?  @map("refresh_token") ${database !== 'sqlite' ? '@db.Text' : ''}
-  accessToken       String?  @map("access_token") ${database !== 'sqlite' ? '@db.Text' : ''}
-  expiresAt         Int?     @map("expires_at")
-  tokenType         String?  @map("token_type")
-  scope             String?
-  idToken           String?  @map("id_token") ${database !== 'sqlite' ? '@db.Text' : ''}
-  createdAt         DateTime @default(now()) @map("created_at")
-  updatedAt         DateTime @updatedAt @map("updated_at")
+  id                String   @id @default(uuid())${mapCol('id')}
+  userId            String${mapCol('userId')}
+  type              String${mapCol('type')}
+  provider          String${mapCol('provider')}
+  providerAccountId String${mapCol('providerAccountId')}
+  refreshToken      String?${dbText}${mapCol('refreshToken')}
+  accessToken       String?${dbText}${mapCol('accessToken')}
+  expiresAt         Int?${mapCol('expiresAt')}
+  tokenType         String?${mapCol('tokenType')}
+  scope             String?${mapCol('scope')}
+  idToken           String?${dbText}${mapCol('idToken')}
+  createdAt         DateTime @default(now())${mapCol('createdAt')}
+  updatedAt         DateTime @updatedAt${mapCol('updatedAt')}
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
-  @@map("account")
+${mapTable('account')}
 }
 
 model Session {
-  id           String   @id @default(uuid())
-  sessionToken String   @unique @map("session_token")
-  userId       String   @map("user_id")
-  expires      DateTime
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  id           String   @id @default(uuid())${mapCol('id')}
+  sessionToken String   @unique${mapCol('sessionToken')}
+  userId       String${mapCol('userId')}
+  expires      DateTime${mapCol('expires')}
+  createdAt    DateTime @default(now())${mapCol('createdAt')}
+  updatedAt    DateTime @updatedAt${mapCol('updatedAt')}
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@map("session")
+${mapTable('session')}
 }
 
 model VerificationToken {
-  identifier String
-  token      String   @unique
-  expires    DateTime
+  identifier String${mapCol('identifier')}
+  token      String   @unique${mapCol('token')}
+  expires    DateTime${mapCol('expires')}
 
   @@unique([identifier, token])
-  @@map("verification_token")
+${mapTable('verificationToken')}
 }
 `;
 }
 
+// =============================================================================
+// Init Command
+// =============================================================================
+
 function init(options: InitOptions): void {
-  const { database, orm, outputDir } = options;
+  const { database, orm, outputDir, tableCasing, columnCasing, pluralTables, force } = options;
+  const nm = createNameMapper(options);
 
   console.log(`\n🔐 SvelteKit Auth - Schema Setup\n`);
-  console.log(`   Database: ${database}`);
-  console.log(`   ORM:      ${orm}`);
-  console.log(`   Output:   ${outputDir}\n`);
+  console.log(`   Database:  ${database}`);
+  console.log(`   ORM:       ${orm}`);
+  console.log(`   Tables:    ${tableCasing}${pluralTables ? ' (plural)' : ''}`);
+  console.log(`   Columns:   ${columnCasing}`);
+  console.log(`   Output:    ${outputDir}${force ? ' (force)' : ''}\n`);
 
   // Ensure output directory exists
   const outputPath = resolve(process.cwd(), outputDir);
@@ -292,18 +405,22 @@ function init(options: InitOptions): void {
   }
 
   // Check if file already exists
-  if (existsSync(outputPath)) {
+  if (existsSync(outputPath) && !options.force) {
     console.log(`   ⚠️  File already exists: ${outputDir}`);
     console.log(`   Skipping to avoid overwriting your changes.\n`);
-    console.log(`   To regenerate, delete the file first.\n`);
+    console.log(`   Use --force to overwrite.\n`);
     return;
   }
 
-  // Get and write schema content
-  const content = getSchemaContent(orm, database);
+  // Generate and write schema content
+  const content = orm === 'drizzle'
+    ? getDrizzleSchema(database, nm)
+    : getPrismaSchema(database, nm);
+
+  const existed = existsSync(outputPath);
   writeFileSync(outputPath, content, 'utf-8');
 
-  console.log(`   ✅ Created: ${outputDir}\n`);
+  console.log(`   ✅ ${existed ? 'Overwrote' : 'Created'}: ${outputDir}\n`);
 
   // Next steps
   console.log(`📋 Next steps:\n`);
@@ -321,6 +438,10 @@ function init(options: InitOptions): void {
   console.log(`\n   See docs: https://github.com/spaethtech/sveltekit-auth\n`);
 }
 
+// =============================================================================
+// Help
+// =============================================================================
+
 function showHelp(): void {
   console.log(`
 🔐 SvelteKit Auth CLI
@@ -332,20 +453,39 @@ Commands:
   init    Generate auth schema files
 
 Options:
-  -d, --database <type>   Database type: postgres, mysql, sqlite (default: postgres)
-  -o, --orm <type>        ORM type: drizzle, prisma (default: drizzle)
-  -O, --output <path>     Output path (default: src/lib/server/db/auth.schema.ts)
+  -d, --database <type>   Database: postgres, mysql, sqlite (default: postgres)
+      --orm <type>        ORM: drizzle, prisma (default: drizzle)
+  -o, --output <path>     Output path (default: src/lib/server/schemas/auth.ts)
+
+  -t, --tables <casing>   Table name casing: snake, camel, pascal (default: snake)
+  -c, --columns <casing>  Column name casing: snake, camel, pascal (default: snake)
+      --singular          Use singular table names (user, account, etc.)
+  -f, --force             Overwrite existing schema file
+
   -h, --help              Show this help message
 
 Examples:
+  # Default: PostgreSQL + Drizzle with snake_case, plural tables
   npx @sveltekit-auth/core init
-  npx @sveltekit-auth/core init --database postgres --orm drizzle
-  npx @sveltekit-auth/core init -d mysql -o prisma
-  npx @sveltekit-auth/core init --output src/db/schema.ts
+
+  # MySQL with camelCase columns
+  npx @sveltekit-auth/core init -d mysql --columns camel
+
+  # Prisma with snake_case tables and columns
+  npx @sveltekit-auth/core init --orm prisma -t snake -c snake
+
+  # Singular table names (user, account, session)
+  npx @sveltekit-auth/core init --singular
+
+  # Everything camelCase
+  npx @sveltekit-auth/core init --tables camel --columns camel
 `);
 }
 
+// =============================================================================
 // Main
+// =============================================================================
+
 const args = process.argv.slice(2);
 const command = args[0];
 
