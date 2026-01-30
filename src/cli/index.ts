@@ -9,7 +9,7 @@
  */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
 type Database = 'postgres' | 'mysql' | 'sqlite';
 type ORM = 'drizzle' | 'prisma';
@@ -31,8 +31,8 @@ interface InitOptions {
 }
 
 const DEFAULT_OUTPUT: Record<ORM, string> = {
-  drizzle: 'src/lib/server/schemas/auth.ts',
-  prisma: 'prisma/schema/auth.prisma'
+  drizzle: 'src/lib/server/schemas',
+  prisma: 'prisma/schema'
 };
 
 // =============================================================================
@@ -192,7 +192,7 @@ function parseArgs(args: string[]): InitOptions {
 }
 
 // =============================================================================
-// Schema Generators
+// Schema Generators - Drizzle
 // =============================================================================
 
 interface SchemaOptions {
@@ -200,8 +200,21 @@ interface SchemaOptions {
   softDelete: boolean;
 }
 
-function getDrizzleSchema(database: Database, nm: NameMapper, opts: SchemaOptions): string {
-  const { idType, softDelete } = opts;
+interface DrizzleHelpers {
+  imports: string;
+  tableFunc: string;
+  intType: string;
+  idDef: string;
+  cuidImport: string;
+  timestampDef: (col: string) => string;
+  nullableTimestamp: (col: string) => string;
+  expiresTimestamp: (col: string) => string;
+  textCol: (col: string, extra?: string) => string;
+}
+
+function createDrizzleHelpers(database: Database, nm: NameMapper, opts: SchemaOptions): DrizzleHelpers {
+  const { idType } = opts;
+
   const imports = {
     postgres: `import { pgTable, text, timestamp, integer, primaryKey, uniqueIndex } from 'drizzle-orm/pg-core';`,
     mysql: `import { mysqlTable, varchar, text, timestamp, int, primaryKey, uniqueIndex } from 'drizzle-orm/mysql-core';`,
@@ -216,11 +229,7 @@ function getDrizzleSchema(database: Database, nm: NameMapper, opts: SchemaOption
 
   const intType = database === 'mysql' ? 'int' : 'integer';
 
-  // ID generation based on idType
-  const idGenerator = idType === 'cuid'
-    ? `createId()`  // from @paralleldrive/cuid2
-    : `crypto.randomUUID()`;
-
+  const idGenerator = idType === 'cuid' ? `createId()` : `crypto.randomUUID()`;
   const idLength = idType === 'cuid' ? 24 : 36;
 
   const idDef = database === 'mysql'
@@ -257,93 +266,128 @@ function getDrizzleSchema(database: Database, nm: NameMapper, opts: SchemaOption
     return `text('${nm.column(col)}')${extra}`;
   };
 
+  return {
+    imports: imports[database],
+    tableFunc: tableFunc[database],
+    intType,
+    idDef,
+    cuidImport,
+    timestampDef,
+    nullableTimestamp,
+    expiresTimestamp,
+    textCol
+  };
+}
+
+function getDrizzleUsersSchema(database: Database, nm: NameMapper, opts: SchemaOptions): string {
+  const { softDelete } = opts;
+  const h = createDrizzleHelpers(database, nm, opts);
+
   return `/**
- * SvelteKit Auth - Database Schema
+ * SvelteKit Auth - Users Schema
+ *
+ * This file contains the User model. Extend it with your app-specific fields.
+ * The auth system will use this model for user management.
  *
  * Generated for: ${database} with Drizzle ORM
- * ID type: ${idType}
- * Table casing: ${nm.table('user')} (from 'user')
- * Column casing: ${nm.column('userId')} (from 'userId')
- *
- * Modify this file as needed, then run migrations.
  */
 
-${cuidImport}${imports[database]}
+${h.cuidImport}${h.imports}
 
-export const users = ${tableFunc[database]}('${nm.table('user')}', {
-  ${idDef},
-  ${textCol('email', '.notNull()')},
-  ${nullableTimestamp('emailVerified')},
-  ${textCol('name')},
-  ${textCol('image')},
-  ${timestampDef('createdAt')},
-  ${timestampDef('updatedAt')}${softDelete ? `,
-  ${nullableTimestamp('deletedAt')}` : ''}
+export const users = ${h.tableFunc}('${nm.table('user')}', {
+  ${h.idDef},
+  ${h.textCol('email', '.notNull()')},
+  ${h.nullableTimestamp('emailVerified')},
+  ${h.textCol('name')},
+  ${h.textCol('image')},
+  ${h.timestampDef('createdAt')},
+  ${h.timestampDef('updatedAt')}${softDelete ? `,
+  ${h.nullableTimestamp('deletedAt')}` : ''}
+
+  // Add your custom fields here:
+  // role: text('role').$type<'user' | 'admin'>().default('user'),
+  // bio: text('bio'),
 }, (table) => [
   uniqueIndex('${nm.table('user')}_email_idx').on(table.email)
-]);
-
-export const accounts = ${tableFunc[database]}('${nm.table('account')}', {
-  ${idDef},
-  ${textCol('userId', `.notNull().references(() => users.id, { onDelete: 'cascade' })`)},
-  ${textCol('type', `.$type<'oauth' | 'credentials' | 'email'>().notNull()`)},
-  ${textCol('provider', '.notNull()')},
-  ${textCol('providerAccountId', '.notNull()')},
-  ${textCol('passwordHash')},
-  ${textCol('refreshToken')},
-  ${textCol('accessToken')},
-  ${intType}('${nm.column('expiresAt')}'),
-  ${textCol('tokenType')},
-  ${textCol('scope')},
-  ${textCol('idToken')},
-  ${timestampDef('createdAt')},
-  ${timestampDef('updatedAt')}
-}, (table) => [
-  uniqueIndex('${nm.table('account')}_provider_idx').on(table.provider, table.providerAccountId)
-]);
-
-export const sessions = ${tableFunc[database]}('${nm.table('session')}', {
-  ${idDef},
-  ${textCol('sessionToken', '.notNull().unique()')},
-  ${textCol('userId', `.notNull().references(() => users.id, { onDelete: 'cascade' })`)},
-  ${expiresTimestamp('expires')},
-  ${timestampDef('createdAt')},
-  ${timestampDef('updatedAt')}
-});
-
-export const verifications = ${tableFunc[database]}('${nm.table('verification')}', {
-  ${textCol('identifier', '.notNull()')},
-  ${textCol('token', '.notNull().unique()')},
-  ${expiresTimestamp('expires')}
-}, (table) => [
-  primaryKey({ columns: [table.identifier, table.token] })
 ]);
 
 // Type exports
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
+`;
+}
+
+function getDrizzleAuthSchema(database: Database, nm: NameMapper, opts: SchemaOptions): string {
+  const h = createDrizzleHelpers(database, nm, opts);
+
+  return `/**
+ * SvelteKit Auth - Auth Schema
+ *
+ * Internal auth tables: accounts, sessions, verifications.
+ * You typically don't need to modify this file.
+ *
+ * Generated for: ${database} with Drizzle ORM
+ */
+
+${h.cuidImport}${h.imports}
+import { users } from './users.js';
+
+export const accounts = ${h.tableFunc}('${nm.table('account')}', {
+  ${h.idDef},
+  ${h.textCol('userId', `.notNull().references(() => users.id, { onDelete: 'cascade' })`)},
+  ${h.textCol('type', `.$type<'oauth' | 'credentials' | 'email'>().notNull()`)},
+  ${h.textCol('provider', '.notNull()')},
+  ${h.textCol('providerAccountId', '.notNull()')},
+  ${h.textCol('passwordHash')},
+  ${h.textCol('refreshToken')},
+  ${h.textCol('accessToken')},
+  ${h.intType}('${nm.column('expiresAt')}'),
+  ${h.textCol('tokenType')},
+  ${h.textCol('scope')},
+  ${h.textCol('idToken')},
+  ${h.timestampDef('createdAt')},
+  ${h.timestampDef('updatedAt')}
+}, (table) => [
+  uniqueIndex('${nm.table('account')}_provider_idx').on(table.provider, table.providerAccountId)
+]);
+
+export const sessions = ${h.tableFunc}('${nm.table('session')}', {
+  ${h.idDef},
+  ${h.textCol('sessionToken', '.notNull().unique()')},
+  ${h.textCol('userId', `.notNull().references(() => users.id, { onDelete: 'cascade' })`)},
+  ${h.expiresTimestamp('expires')},
+  ${h.timestampDef('createdAt')},
+  ${h.timestampDef('updatedAt')}
+});
+
+export const verifications = ${h.tableFunc}('${nm.table('verification')}', {
+  ${h.textCol('identifier', '.notNull()')},
+  ${h.textCol('token', '.notNull().unique()')},
+  ${h.expiresTimestamp('expires')}
+}, (table) => [
+  primaryKey({ columns: [table.identifier, table.token] })
+]);
+
+// Type exports
 export type Account = typeof accounts.$inferSelect;
 export type NewAccount = typeof accounts.$inferInsert;
 export type Session = typeof sessions.$inferSelect;
 export type NewSession = typeof sessions.$inferInsert;
 export type Verification = typeof verifications.$inferSelect;
 export type NewVerification = typeof verifications.$inferInsert;
+
+// Re-export users for convenience
+export { users, type User, type NewUser } from './users.js';
 `;
 }
 
-function getPrismaSchema(database: Database, nm: NameMapper, opts: SchemaOptions): string {
+// =============================================================================
+// Schema Generators - Prisma
+// =============================================================================
+
+function getPrismaUsersSchema(database: Database, nm: NameMapper, opts: SchemaOptions): string {
   const { idType, softDelete } = opts;
-  const datasource = {
-    postgres: 'postgresql',
-    mysql: 'mysql',
-    sqlite: 'sqlite'
-  };
-
-  const dbText = database !== 'sqlite' ? ' @db.Text' : '';
-
-  // For Prisma, model names are always PascalCase in code
-  // We use @@map() to set the actual DB table name
-  // And @map() for column names
+  const idDefault = idType === 'cuid' ? 'cuid()' : 'uuid()';
 
   const mapCol = (tsName: string) => {
     const dbName = nm.column(tsName);
@@ -355,23 +399,12 @@ function getPrismaSchema(database: Database, nm: NameMapper, opts: SchemaOptions
     return `  @@map("${dbName}")`;
   };
 
-  const idDefault = idType === 'cuid' ? 'cuid()' : 'uuid()';
-
-  return `// SvelteKit Auth - Prisma Schema
+  return `// SvelteKit Auth - Users Schema
+//
+// This file contains the User model. Extend it with your app-specific fields.
+// The auth system will use this model for user management.
 //
 // Generated for: ${database}
-// ID type: ${idType}
-// Table casing: ${nm.table('user')} (from 'user')
-// Column casing: ${nm.column('userId')} (from 'userId')
-//
-// Copy these models to your schema.prisma file, then run:
-//   npx prisma migrate dev
-
-// Add this datasource if not already present:
-// datasource db {
-//   provider = "${datasource[database]}"
-//   url      = env("DATABASE_URL")
-// }
 
 model User {
   id            String    @id @default(${idDefault})${mapCol('id')}
@@ -383,11 +416,39 @@ model User {
   updatedAt     DateTime  @updatedAt${mapCol('updatedAt')}${softDelete ? `
   deletedAt     DateTime?${mapCol('deletedAt')}` : ''}
 
+  // Add your custom fields here:
+  // role          String    @default("user")
+  // bio           String?
+
   accounts Account[]
   sessions Session[]
 
 ${mapTable('user')}
 }
+`;
+}
+
+function getPrismaAuthSchema(database: Database, nm: NameMapper, opts: SchemaOptions): string {
+  const { idType } = opts;
+  const idDefault = idType === 'cuid' ? 'cuid()' : 'uuid()';
+  const dbText = database !== 'sqlite' ? ' @db.Text' : '';
+
+  const mapCol = (tsName: string) => {
+    const dbName = nm.column(tsName);
+    return dbName !== tsName ? ` @map("${dbName}")` : '';
+  };
+
+  const mapTable = (tsName: string) => {
+    const dbName = nm.table(tsName);
+    return `  @@map("${dbName}")`;
+  };
+
+  return `// SvelteKit Auth - Auth Schema
+//
+// Internal auth tables: accounts, sessions, verifications.
+// You typically don't need to modify this file.
+//
+// Generated for: ${database}
 
 model Account {
   id                String   @id @default(${idDefault})${mapCol('id')}
@@ -439,10 +500,26 @@ ${mapTable('verification')}
 // Init Command
 // =============================================================================
 
+interface SchemaFile {
+  name: string;
+  content: string;
+}
+
 function init(options: InitOptions): void {
   const { database, orm, outputDir, tableCasing, columnCasing, pluralTables, idType, prefix, softDelete, dryRun, force } = options;
   const nm = createNameMapper(options);
   const schemaOpts: SchemaOptions = { idType, softDelete };
+
+  const ext = orm === 'drizzle' ? 'ts' : 'prisma';
+  const files: SchemaFile[] = orm === 'drizzle'
+    ? [
+        { name: `users.${ext}`, content: getDrizzleUsersSchema(database, nm, schemaOpts) },
+        { name: `auth.${ext}`, content: getDrizzleAuthSchema(database, nm, schemaOpts) }
+      ]
+    : [
+        { name: `users.${ext}`, content: getPrismaUsersSchema(database, nm, schemaOpts) },
+        { name: `auth.${ext}`, content: getPrismaAuthSchema(database, nm, schemaOpts) }
+      ];
 
   console.log(`\n🔐 SvelteKit Auth - Schema Setup\n`);
   console.log(`   Database:  ${database}`);
@@ -453,55 +530,53 @@ function init(options: InitOptions): void {
   if (softDelete) {
     console.log(`   Features:  soft-delete`);
   }
-  console.log(`   Output:    ${outputDir}${dryRun ? ' (dry-run)' : ''}${force ? ' (force)' : ''}\n`);
-
-  // Ensure output directory exists
-  const outputPath = resolve(process.cwd(), outputDir);
-  const outputDirPath = dirname(outputPath);
-
-  if (!existsSync(outputDirPath)) {
-    mkdirSync(outputDirPath, { recursive: true });
-    console.log(`   Created directory: ${outputDirPath}`);
-  }
-
-  // Check if file already exists
-  if (existsSync(outputPath) && !options.force) {
-    console.log(`   ⚠️  File already exists: ${outputDir}`);
-    console.log(`   Skipping to avoid overwriting your changes.\n`);
-    console.log(`   Use --force to overwrite.\n`);
-    return;
-  }
-
-  // Generate schema content
-  const content = orm === 'drizzle'
-    ? getDrizzleSchema(database, nm, schemaOpts)
-    : getPrismaSchema(database, nm, schemaOpts);
+  console.log(`   Output:    ${outputDir}/${dryRun ? ' (dry-run)' : ''}${force ? ' (force)' : ''}\n`);
 
   // Dry run - just show the content
   if (dryRun) {
-    console.log(`   Preview of ${outputDir}:\n`);
-    console.log('─'.repeat(60));
-    console.log(content);
-    console.log('─'.repeat(60));
-    console.log(`\n   (dry-run mode - no files written)\n`);
+    for (const file of files) {
+      console.log(`   Preview of ${outputDir}/${file.name}:\n`);
+      console.log('─'.repeat(60));
+      console.log(file.content);
+      console.log('─'.repeat(60));
+      console.log('');
+    }
+    console.log(`   (dry-run mode - no files written)\n`);
     return;
   }
 
-  const existed = existsSync(outputPath);
-  writeFileSync(outputPath, content, 'utf-8');
+  // Ensure output directory exists
+  const outputPath = resolve(process.cwd(), outputDir);
 
-  console.log(`   ✅ ${existed ? 'Overwrote' : 'Created'}: ${outputDir}\n`);
+  if (!existsSync(outputPath)) {
+    mkdirSync(outputPath, { recursive: true });
+    console.log(`   Created directory: ${outputDir}/`);
+  }
+
+  // Write each file
+  for (const file of files) {
+    const filePath = join(outputPath, file.name);
+    const existed = existsSync(filePath);
+
+    if (existed && !force) {
+      console.log(`   ⚠️  Skipped ${file.name} (already exists, use --force to overwrite)`);
+      continue;
+    }
+
+    writeFileSync(filePath, file.content, 'utf-8');
+    console.log(`   ✅ ${existed ? 'Overwrote' : 'Created'}: ${outputDir}/${file.name}`);
+  }
 
   // Next steps
-  console.log(`📋 Next steps:\n`);
+  console.log(`\n📋 Next steps:\n`);
 
   if (orm === 'drizzle') {
-    console.log(`   1. Review and customize the schema in ${outputDir}`);
-    console.log(`   2. Update your drizzle.config.ts to include the schema`);
+    console.log(`   1. Add custom fields to ${outputDir}/users.ts`);
+    console.log(`   2. Update your drizzle.config.ts to include the schemas`);
     console.log(`   3. Run migrations: npx drizzle-kit generate && npx drizzle-kit migrate`);
   } else {
-    console.log(`   1. Copy the models from ${outputDir} to your schema.prisma`);
-    console.log(`   2. Customize as needed`);
+    console.log(`   1. Add custom fields to ${outputDir}/users.prisma`);
+    console.log(`   2. Import both files in your main schema.prisma`);
     console.log(`   3. Run migrations: npx prisma migrate dev`);
   }
 
@@ -522,10 +597,15 @@ Usage:
 Commands:
   init    Generate auth schema files
 
+Output:
+  Creates two schema files in the output directory:
+    users.ts   - User model (extend with your custom fields)
+    auth.ts    - Auth tables (accounts, sessions, verifications)
+
 Options:
   -d, --database <type>   Database: postgres, mysql, sqlite (default: postgres)
       --orm <type>        ORM: drizzle, prisma (default: drizzle)
-  -o, --output <path>     Output path (default: src/lib/server/schemas/auth.ts)
+  -o, --output <dir>      Output directory (default: src/lib/server/schemas)
 
   -t, --tables <casing>   Table name casing: snake, camel, pascal (default: snake)
   -c, --columns <casing>  Column name casing: snake, camel, pascal (default: snake)
@@ -535,7 +615,7 @@ Options:
       --soft-delete       Add deletedAt column for soft deletes
 
       --dry-run           Preview schema without writing to disk
-  -f, --force             Overwrite existing schema file
+  -f, --force             Overwrite existing schema files
   -h, --help              Show this help message
 
 Examples:
