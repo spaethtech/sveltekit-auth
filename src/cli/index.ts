@@ -287,11 +287,10 @@ function getDrizzleUsersSchema(database: Database, nm: NameMapper, opts: SchemaO
  * SvelteKit Auth - Users Schema
  *
  * This file contains the User model. Extend it with your app-specific fields.
- * The auth system will use this model for user management.
+ * The auth system only requires the 'id' field for linking accounts.
  *
- * IMPORTANT: Do not remove or rename the existing fields (id, email, emailVerified,
- * name, image, createdAt, updatedAt). The auth system depends on these fields.
- * You may add new fields below the existing ones.
+ * The 'email' field here is optional profile/contact info, separate from
+ * auth credentials which are stored in the accounts table.
  *
  * Generated for: ${database} with Drizzle ORM
  */
@@ -300,9 +299,8 @@ ${h.cuidImport}${h.imports}
 
 export const users = ${h.tableFunc}('${nm.table('user')}', {
   ${h.idDef},
-  ${h.textCol('email', '.notNull()')},
-  ${h.nullableTimestamp('emailVerified')},
   ${h.textCol('name')},
+  ${h.textCol('email')},
   ${h.textCol('image')},
   ${h.timestampDef('createdAt')},
   ${h.timestampDef('updatedAt')}${softDelete ? `,
@@ -311,9 +309,7 @@ export const users = ${h.tableFunc}('${nm.table('user')}', {
   // Add your custom fields here:
   // role: text('role').$type<'user' | 'admin'>().default('user'),
   // bio: text('bio'),
-}, (table) => [
-  uniqueIndex('${nm.table('user')}_email_idx').on(table.email)
-]);
+});
 
 // Type exports
 export type User = typeof users.$inferSelect;
@@ -341,7 +337,9 @@ export const accounts = ${h.tableFunc}('${nm.table('account')}', {
   ${h.textCol('userId', `.notNull().references(() => users.id, { onDelete: 'cascade' })`)},
   ${h.textCol('type', `.$type<'oauth' | 'credentials' | 'email'>().notNull()`)},
   ${h.textCol('provider', '.notNull()')},
-  ${h.textCol('providerAccountId', '.notNull()')},
+  ${h.textCol('providerAccountId')},
+  ${h.textCol('login', '.notNull()')},
+  ${h.nullableTimestamp('loginVerified')},
   ${h.textCol('passwordHash')},
   ${h.textCol('refreshToken')},
   ${h.textCol('accessToken')},
@@ -352,7 +350,7 @@ export const accounts = ${h.tableFunc}('${nm.table('account')}', {
   ${h.timestampDef('createdAt')},
   ${h.timestampDef('updatedAt')}
 }, (table) => [
-  uniqueIndex('${nm.table('account')}_provider_idx').on(table.provider, table.providerAccountId)
+  uniqueIndex('${nm.table('account')}_provider_login_idx').on(table.provider, table.login)
 ]);
 
 export const sessions = ${h.tableFunc}('${nm.table('session')}', {
@@ -406,19 +404,17 @@ function getPrismaUsersSchema(database: Database, nm: NameMapper, opts: SchemaOp
   return `// SvelteKit Auth - Users Schema
 //
 // This file contains the User model. Extend it with your app-specific fields.
-// The auth system will use this model for user management.
+// The auth system only requires the 'id' field for linking accounts.
 //
-// IMPORTANT: Do not remove or rename the existing fields (id, email, emailVerified,
-// name, image, createdAt, updatedAt). The auth system depends on these fields.
-// You may add new fields below the existing ones.
+// The 'email' field here is optional profile/contact info, separate from
+// auth credentials which are stored in the accounts table.
 //
 // Generated for: ${database}
 
 model User {
   id            String    @id @default(${idDefault})${mapCol('id')}
-  email         String    @unique${mapCol('email')}
-  emailVerified DateTime?${mapCol('emailVerified')}
   name          String?${mapCol('name')}
+  email         String?${mapCol('email')}
   image         String?${mapCol('image')}
   createdAt     DateTime  @default(now())${mapCol('createdAt')}
   updatedAt     DateTime  @updatedAt${mapCol('updatedAt')}${softDelete ? `
@@ -459,11 +455,13 @@ function getPrismaAuthSchema(database: Database, nm: NameMapper, opts: SchemaOpt
 // Generated for: ${database}
 
 model Account {
-  id                String   @id @default(${idDefault})${mapCol('id')}
+  id                String    @id @default(${idDefault})${mapCol('id')}
   userId            String${mapCol('userId')}
   type              String${mapCol('type')}
   provider          String${mapCol('provider')}
-  providerAccountId String${mapCol('providerAccountId')}
+  providerAccountId String?${mapCol('providerAccountId')}
+  login             String${mapCol('login')}
+  loginVerified     DateTime?${mapCol('loginVerified')}
   passwordHash      String?${mapCol('passwordHash')}
   refreshToken      String?${dbText}${mapCol('refreshToken')}
   accessToken       String?${dbText}${mapCol('accessToken')}
@@ -471,12 +469,12 @@ model Account {
   tokenType         String?${mapCol('tokenType')}
   scope             String?${mapCol('scope')}
   idToken           String?${dbText}${mapCol('idToken')}
-  createdAt         DateTime @default(now())${mapCol('createdAt')}
-  updatedAt         DateTime @updatedAt${mapCol('updatedAt')}
+  createdAt         DateTime  @default(now())${mapCol('createdAt')}
+  updatedAt         DateTime  @updatedAt${mapCol('updatedAt')}
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([provider, providerAccountId])
+  @@unique([provider, login])
 ${mapTable('account')}
 }
 
