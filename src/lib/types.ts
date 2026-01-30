@@ -104,10 +104,16 @@ export interface OAuthProviderConfig extends ProviderConfig {
 }
 
 /**
+ * Login type for credentials provider
+ */
+export type LoginType = 'email' | 'username' | 'either';
+
+/**
  * Credentials provider configuration
  */
 export interface CredentialsProviderConfig extends ProviderConfig {
   type: 'credentials';
+  loginType: LoginType;
   credentials: Record<string, CredentialInput>;
   authorize: (
     credentials: Credentials,
