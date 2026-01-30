@@ -24,6 +24,9 @@ interface InitOptions {
   columnCasing: Casing;
   pluralTables: boolean;
   idType: IdType;
+  prefix: string;
+  softDelete: boolean;
+  dryRun: boolean;
   force: boolean;
 }
 
@@ -80,7 +83,11 @@ function createNameMapper(options: InitOptions): NameMapper {
       if (options.pluralTables) {
         result = pluralize(result);
       }
-      return applyCasing(result, options.tableCasing);
+      result = applyCasing(result, options.tableCasing);
+      if (options.prefix) {
+        result = options.prefix + result;
+      }
+      return result;
     },
     column(name: string): string {
       return applyCasing(name, options.columnCasing);
@@ -101,6 +108,9 @@ function parseArgs(args: string[]): InitOptions {
     columnCasing: 'snake',
     pluralTables: true,
     idType: 'uuid',
+    prefix: '',
+    softDelete: false,
+    dryRun: false,
     force: false
   };
 
@@ -155,6 +165,18 @@ function parseArgs(args: string[]): InitOptions {
           i++;
         }
         break;
+      case '--prefix':
+        if (next && !next.startsWith('-')) {
+          options.prefix = next;
+          i++;
+        }
+        break;
+      case '--soft-delete':
+        options.softDelete = true;
+        break;
+      case '--dry-run':
+        options.dryRun = true;
+        break;
       case '--force':
       case '-f':
         options.force = true;
@@ -173,7 +195,13 @@ function parseArgs(args: string[]): InitOptions {
 // Schema Generators
 // =============================================================================
 
-function getDrizzleSchema(database: Database, nm: NameMapper, idType: IdType): string {
+interface SchemaOptions {
+  idType: IdType;
+  softDelete: boolean;
+}
+
+function getDrizzleSchema(database: Database, nm: NameMapper, opts: SchemaOptions): string {
+  const { idType, softDelete } = opts;
   const imports = {
     postgres: `import { pgTable, text, timestamp, integer, primaryKey, uniqueIndex } from 'drizzle-orm/pg-core';`,
     mysql: `import { mysqlTable, varchar, text, timestamp, int, primaryKey, uniqueIndex } from 'drizzle-orm/mysql-core';`,
@@ -246,10 +274,12 @@ export const users = ${tableFunc[database]}('${nm.table('user')}', {
   ${idDef},
   ${textCol('email', '.notNull()')},
   ${nullableTimestamp('emailVerified')},
+  ${textCol('passwordHash')},
   ${textCol('name')},
   ${textCol('image')},
   ${timestampDef('createdAt')},
-  ${timestampDef('updatedAt')}
+  ${timestampDef('updatedAt')}${softDelete ? `,
+  ${nullableTimestamp('deletedAt')}` : ''}
 }, (table) => [
   uniqueIndex('${nm.table('user')}_email_idx').on(table.email)
 ]);
@@ -301,7 +331,8 @@ export type NewVerification = typeof verifications.$inferInsert;
 `;
 }
 
-function getPrismaSchema(database: Database, nm: NameMapper, idType: IdType): string {
+function getPrismaSchema(database: Database, nm: NameMapper, opts: SchemaOptions): string {
+  const { idType, softDelete } = opts;
   const datasource = {
     postgres: 'postgresql',
     mysql: 'mysql',
@@ -346,10 +377,12 @@ model User {
   id            String    @id @default(${idDefault})${mapCol('id')}
   email         String    @unique${mapCol('email')}
   emailVerified DateTime?${mapCol('emailVerified')}
+  passwordHash  String?${mapCol('passwordHash')}
   name          String?${mapCol('name')}
   image         String?${mapCol('image')}
   createdAt     DateTime  @default(now())${mapCol('createdAt')}
-  updatedAt     DateTime  @updatedAt${mapCol('updatedAt')}
+  updatedAt     DateTime  @updatedAt${mapCol('updatedAt')}${softDelete ? `
+  deletedAt     DateTime?${mapCol('deletedAt')}` : ''}
 
   accounts Account[]
   sessions Session[]
@@ -407,16 +440,20 @@ ${mapTable('verification')}
 // =============================================================================
 
 function init(options: InitOptions): void {
-  const { database, orm, outputDir, tableCasing, columnCasing, pluralTables, idType, force } = options;
+  const { database, orm, outputDir, tableCasing, columnCasing, pluralTables, idType, prefix, softDelete, dryRun, force } = options;
   const nm = createNameMapper(options);
+  const schemaOpts: SchemaOptions = { idType, softDelete };
 
   console.log(`\n🔐 SvelteKit Auth - Schema Setup\n`);
   console.log(`   Database:  ${database}`);
   console.log(`   ORM:       ${orm}`);
   console.log(`   ID Type:   ${idType}`);
-  console.log(`   Tables:    ${tableCasing}${pluralTables ? ' (plural)' : ''}`);
+  console.log(`   Tables:    ${tableCasing}${pluralTables ? ' (plural)' : ''}${prefix ? ` (prefix: ${prefix})` : ''}`);
   console.log(`   Columns:   ${columnCasing}`);
-  console.log(`   Output:    ${outputDir}${force ? ' (force)' : ''}\n`);
+  if (softDelete) {
+    console.log(`   Features:  soft-delete`);
+  }
+  console.log(`   Output:    ${outputDir}${dryRun ? ' (dry-run)' : ''}${force ? ' (force)' : ''}\n`);
 
   // Ensure output directory exists
   const outputPath = resolve(process.cwd(), outputDir);
@@ -435,10 +472,20 @@ function init(options: InitOptions): void {
     return;
   }
 
-  // Generate and write schema content
+  // Generate schema content
   const content = orm === 'drizzle'
-    ? getDrizzleSchema(database, nm, idType)
-    : getPrismaSchema(database, nm, idType);
+    ? getDrizzleSchema(database, nm, schemaOpts)
+    : getPrismaSchema(database, nm, schemaOpts);
+
+  // Dry run - just show the content
+  if (dryRun) {
+    console.log(`   Preview of ${outputDir}:\n`);
+    console.log('─'.repeat(60));
+    console.log(content);
+    console.log('─'.repeat(60));
+    console.log(`\n   (dry-run mode - no files written)\n`);
+    return;
+  }
 
   const existed = existsSync(outputPath);
   writeFileSync(outputPath, content, 'utf-8');
@@ -484,8 +531,11 @@ Options:
   -c, --columns <casing>  Column name casing: snake, camel, pascal (default: snake)
       --id <type>         ID generation: uuid, cuid (default: uuid)
       --singular          Use singular table names (user, account, etc.)
-  -f, --force             Overwrite existing schema file
+      --prefix <string>   Add prefix to table names (e.g., auth_)
+      --soft-delete       Add deletedAt column for soft deletes
 
+      --dry-run           Preview schema without writing to disk
+  -f, --force             Overwrite existing schema file
   -h, --help              Show this help message
 
 Examples:
@@ -501,11 +551,14 @@ Examples:
   # Prisma with snake_case tables and columns
   npx @sveltekit-auth/core init --orm prisma -t snake -c snake
 
-  # Singular table names (user, account, session, verification)
-  npx @sveltekit-auth/core init --singular
+  # Add table prefix for shared databases
+  npx @sveltekit-auth/core init --prefix auth_
 
-  # Everything camelCase with CUID
-  npx @sveltekit-auth/core init --tables camel --columns camel --id cuid
+  # Preview what will be generated
+  npx @sveltekit-auth/core init --dry-run
+
+  # Enable soft deletes
+  npx @sveltekit-auth/core init --soft-delete
 `);
 }
 
