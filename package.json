@@ -25,6 +25,18 @@
     "./adapters": {
       "types": "./dist/adapters/index.d.ts",
       "default": "./dist/adapters/index.js"
+    },
+    "./adapters/schema/drizzle-pg": {
+      "types": "./dist/adapters/schema/drizzle-pg.d.ts",
+      "default": "./dist/adapters/schema/drizzle-pg.js"
+    },
+    "./adapters/schema/drizzle-mysql": {
+      "types": "./dist/adapters/schema/drizzle-mysql.d.ts",
+      "default": "./dist/adapters/schema/drizzle-mysql.js"
+    },
+    "./adapters/schema/drizzle-sqlite": {
+      "types": "./dist/adapters/schema/drizzle-sqlite.d.ts",
+      "default": "./dist/adapters/schema/drizzle-sqlite.js"
     }
   },
   "files": [
