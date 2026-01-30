@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Authentication library for SvelteKit 5 with runes mode support",
   "type": "module",
+  "bin": {
+    "sveltekit-auth": "./dist/cli/index.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -41,7 +44,8 @@
   },
   "files": [
     "dist",
-    "!dist/**/*.test.*"
+    "!dist/**/*.test.*",
+    "cli"
   ],
   "scripts": {
     "dev": "vite dev",
