@@ -274,7 +274,6 @@ export const users = ${tableFunc[database]}('${nm.table('user')}', {
   ${idDef},
   ${textCol('email', '.notNull()')},
   ${nullableTimestamp('emailVerified')},
-  ${textCol('passwordHash')},
   ${textCol('name')},
   ${textCol('image')},
   ${timestampDef('createdAt')},
@@ -290,6 +289,7 @@ export const accounts = ${tableFunc[database]}('${nm.table('account')}', {
   ${textCol('type', `.$type<'oauth' | 'credentials' | 'email'>().notNull()`)},
   ${textCol('provider', '.notNull()')},
   ${textCol('providerAccountId', '.notNull()')},
+  ${textCol('passwordHash')},
   ${textCol('refreshToken')},
   ${textCol('accessToken')},
   ${intType}('${nm.column('expiresAt')}'),
@@ -377,7 +377,6 @@ model User {
   id            String    @id @default(${idDefault})${mapCol('id')}
   email         String    @unique${mapCol('email')}
   emailVerified DateTime?${mapCol('emailVerified')}
-  passwordHash  String?${mapCol('passwordHash')}
   name          String?${mapCol('name')}
   image         String?${mapCol('image')}
   createdAt     DateTime  @default(now())${mapCol('createdAt')}
@@ -396,6 +395,7 @@ model Account {
   type              String${mapCol('type')}
   provider          String${mapCol('provider')}
   providerAccountId String${mapCol('providerAccountId')}
+  passwordHash      String?${mapCol('passwordHash')}
   refreshToken      String?${dbText}${mapCol('refreshToken')}
   accessToken       String?${dbText}${mapCol('accessToken')}
   expiresAt         Int?${mapCol('expiresAt')}
