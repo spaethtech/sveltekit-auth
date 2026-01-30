@@ -43,6 +43,7 @@ export function resolveConfig(config: AuthConfig): ResolvedAuthConfig {
   return {
     providers: config.providers,
     secret: config.secret,
+    adapter: config.adapter,
     session: {
       ...defaults.session,
       ...config.session

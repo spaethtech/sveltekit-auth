@@ -227,6 +227,11 @@ export interface AuthConfig {
   secret: string;
 
   /**
+   * Database adapter for persisting users, accounts, and sessions
+   */
+  adapter?: Adapter | PartialAdapter;
+
+  /**
    * Session configuration
    */
   session?: {
@@ -286,10 +291,11 @@ export interface AuthConfig {
 /**
  * Resolved authentication configuration with defaults applied
  */
-export interface ResolvedAuthConfig extends Required<Omit<AuthConfig, 'callbacks' | 'pages' | 'cookies'>> {
+export interface ResolvedAuthConfig extends Required<Omit<AuthConfig, 'callbacks' | 'pages' | 'cookies' | 'adapter'>> {
   callbacks: AuthCallbacks;
   pages: NonNullable<AuthConfig['pages']>;
   cookies: CookieConfig;
+  adapter?: Adapter | PartialAdapter;
 }
 
 /**
@@ -360,4 +366,213 @@ export interface MiddlewareOptions {
    * Redirect URL when unauthorized
    */
   unauthorizedRedirect?: string;
+}
+
+// ============================================================================
+// Adapter Types
+// ============================================================================
+
+/**
+ * User model for database adapters
+ * Extends the base User with additional fields for persistence
+ */
+export interface AdapterUser extends User {
+  id: string;
+  email: string;
+  emailVerified: Date | null;
+  name?: string | null;
+  image?: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * Account model for database adapters
+ * Links OAuth/credentials accounts to users
+ */
+export interface AdapterAccount extends Account {
+  id: string;
+  userId: string;
+  provider: string;
+  providerAccountId: string;
+  type: 'oauth' | 'credentials' | 'email';
+  accessToken?: string | null;
+  refreshToken?: string | null;
+  expiresAt?: number | null;
+  tokenType?: string | null;
+  scope?: string | null;
+  idToken?: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * Session model for database adapters
+ * Used when session strategy is 'database'
+ */
+export interface AdapterSession {
+  id: string;
+  userId: string;
+  sessionToken: string;
+  expires: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * Verification token model for database adapters
+ * Used for email verification, password reset, etc.
+ */
+export interface VerificationToken {
+  identifier: string;
+  token: string;
+  expires: Date;
+}
+
+/**
+ * Data adapter interface for persisting auth data
+ *
+ * Implement this interface to store users, accounts, sessions,
+ * and verification tokens in your database of choice.
+ */
+export interface Adapter {
+  // -------------------------------------------------------------------------
+  // User Methods
+  // -------------------------------------------------------------------------
+
+  /**
+   * Create a new user
+   */
+  createUser(user: Omit<AdapterUser, 'id' | 'createdAt' | 'updatedAt'>): Promise<AdapterUser>;
+
+  /**
+   * Get a user by ID
+   */
+  getUser(id: string): Promise<AdapterUser | null>;
+
+  /**
+   * Get a user by email
+   */
+  getUserByEmail(email: string): Promise<AdapterUser | null>;
+
+  /**
+   * Get a user by their account (provider + providerAccountId)
+   */
+  getUserByAccount(params: {
+    provider: string;
+    providerAccountId: string;
+  }): Promise<AdapterUser | null>;
+
+  /**
+   * Update a user
+   */
+  updateUser(
+    user: Partial<AdapterUser> & Pick<AdapterUser, 'id'>
+  ): Promise<AdapterUser>;
+
+  /**
+   * Delete a user and all associated data
+   */
+  deleteUser(id: string): Promise<void>;
+
+  // -------------------------------------------------------------------------
+  // Account Methods
+  // -------------------------------------------------------------------------
+
+  /**
+   * Link an account to a user
+   */
+  linkAccount(
+    account: Omit<AdapterAccount, 'id' | 'createdAt' | 'updatedAt'>
+  ): Promise<AdapterAccount>;
+
+  /**
+   * Unlink an account from a user
+   */
+  unlinkAccount(params: {
+    provider: string;
+    providerAccountId: string;
+  }): Promise<void>;
+
+  /**
+   * Get an account by provider and providerAccountId
+   */
+  getAccount(params: {
+    provider: string;
+    providerAccountId: string;
+  }): Promise<AdapterAccount | null>;
+
+  // -------------------------------------------------------------------------
+  // Session Methods (for database session strategy)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Create a new session
+   */
+  createSession(session: Omit<AdapterSession, 'id' | 'createdAt' | 'updatedAt'>): Promise<AdapterSession>;
+
+  /**
+   * Get a session by session token
+   */
+  getSessionAndUser(sessionToken: string): Promise<{
+    session: AdapterSession;
+    user: AdapterUser;
+  } | null>;
+
+  /**
+   * Update a session
+   */
+  updateSession(
+    session: Partial<AdapterSession> & Pick<AdapterSession, 'sessionToken'>
+  ): Promise<AdapterSession | null>;
+
+  /**
+   * Delete a session by session token
+   */
+  deleteSession(sessionToken: string): Promise<void>;
+
+  // -------------------------------------------------------------------------
+  // Verification Token Methods
+  // -------------------------------------------------------------------------
+
+  /**
+   * Create a verification token
+   */
+  createVerificationToken(token: VerificationToken): Promise<VerificationToken>;
+
+  /**
+   * Use (get and delete) a verification token
+   */
+  useVerificationToken(params: {
+    identifier: string;
+    token: string;
+  }): Promise<VerificationToken | null>;
+}
+
+/**
+ * Partial adapter for when you don't need all methods
+ * All methods are optional - implement only what you need
+ */
+export type PartialAdapter = Partial<Adapter>;
+
+/**
+ * Adapter configuration options
+ */
+export interface AdapterConfig {
+  /**
+   * The adapter instance
+   */
+  adapter: Adapter | PartialAdapter;
+
+  /**
+   * Whether to automatically create users on first sign in
+   * Default: true
+   */
+  autoCreateUser?: boolean;
+
+  /**
+   * Whether to automatically link accounts with the same email
+   * Default: false (for security - user must verify)
+   */
+  autoLinkAccount?: boolean;
 }

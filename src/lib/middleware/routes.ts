@@ -11,13 +11,100 @@ import type {
   Profile,
   OAuthProviderConfig,
   CredentialsProviderConfig,
-  TokenSet
+  TokenSet,
+  Adapter,
+  AdapterUser
 } from '../types.js';
 import {
   createSession,
   setSessionCookie,
   deleteSessionCookie
 } from '../utils/session.js';
+
+/**
+ * Get or create a user in the database via adapter
+ */
+async function getOrCreateUser(
+  adapter: Adapter | Partial<Adapter>,
+  user: User,
+  account: Account,
+  profile?: Profile
+): Promise<AdapterUser> {
+  // Try to find existing user by account
+  if (adapter.getUserByAccount) {
+    const existingUser = await adapter.getUserByAccount({
+      provider: account.provider,
+      providerAccountId: account.providerAccountId
+    });
+
+    if (existingUser) {
+      return existingUser;
+    }
+  }
+
+  // Try to find existing user by email
+  if (user.email && adapter.getUserByEmail) {
+    const existingUser = await adapter.getUserByEmail(user.email);
+
+    if (existingUser) {
+      // Link account to existing user
+      if (adapter.linkAccount) {
+        await adapter.linkAccount({
+          userId: existingUser.id,
+          provider: account.provider,
+          providerAccountId: account.providerAccountId,
+          type: account.type,
+          accessToken: account.accessToken ?? null,
+          refreshToken: account.refreshToken ?? null,
+          expiresAt: account.expiresAt ?? null,
+          tokenType: account.tokenType ?? null,
+          scope: account.scope ?? null,
+          idToken: account.idToken ?? null
+        });
+      }
+
+      return existingUser;
+    }
+  }
+
+  // Create new user
+  if (adapter.createUser) {
+    const newUser = await adapter.createUser({
+      email: user.email ?? '',
+      emailVerified: null,
+      name: user.name,
+      image: user.image
+    });
+
+    // Link account to new user
+    if (adapter.linkAccount) {
+      await adapter.linkAccount({
+        userId: newUser.id,
+        provider: account.provider,
+        providerAccountId: account.providerAccountId,
+        type: account.type,
+        accessToken: account.accessToken ?? null,
+        refreshToken: account.refreshToken ?? null,
+        expiresAt: account.expiresAt ?? null,
+        tokenType: account.tokenType ?? null,
+        scope: account.scope ?? null,
+        idToken: account.idToken ?? null
+      });
+    }
+
+    return newUser;
+  }
+
+  // No adapter methods available, return user as-is
+  return {
+    ...user,
+    id: user.id,
+    email: user.email ?? '',
+    emailVerified: null,
+    createdAt: new Date(),
+    updatedAt: new Date()
+  } as AdapterUser;
+}
 
 /**
  * Handle authentication routes
@@ -208,8 +295,27 @@ async function handleSignIn(
       }
     }
 
+    // Persist user via adapter if configured
+    let finalUser = user;
+    if (config.adapter) {
+      try {
+        const adapterUser = await getOrCreateUser(config.adapter, user, account);
+        finalUser = {
+          id: adapterUser.id,
+          email: adapterUser.email,
+          name: adapterUser.name,
+          image: adapterUser.image
+        };
+      } catch (error) {
+        if (config.debug) {
+          console.error('Adapter error:', error);
+        }
+        // Continue without adapter on error
+      }
+    }
+
     // Create session
-    const session = createSession(user, config.session.maxAge);
+    const session = createSession(finalUser, config.session.maxAge);
     await setSessionCookie(event.cookies, session, config);
 
     // Redirect to callback URL or home
@@ -460,8 +566,27 @@ async function handleOAuthCallback(
       }
     }
 
+    // Persist user and account via adapter if configured
+    let finalUser = user;
+    if (config.adapter) {
+      try {
+        const adapterUser = await getOrCreateUser(config.adapter, user, account, profile);
+        finalUser = {
+          id: adapterUser.id,
+          email: adapterUser.email,
+          name: adapterUser.name,
+          image: adapterUser.image
+        };
+      } catch (error) {
+        if (config.debug) {
+          console.error('Adapter error:', error);
+        }
+        // Continue without adapter on error
+      }
+    }
+
     // Create session
-    const session = createSession(user, config.session.maxAge);
+    const session = createSession(finalUser, config.session.maxAge);
     session.accessToken = tokenSet.accessToken;
     session.refreshToken = tokenSet.refreshToken;
 

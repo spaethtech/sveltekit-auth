@@ -21,6 +21,10 @@
     "./middleware": {
       "types": "./dist/middleware/index.d.ts",
       "default": "./dist/middleware/index.js"
+    },
+    "./adapters": {
+      "types": "./dist/adapters/index.d.ts",
+      "default": "./dist/adapters/index.js"
     }
   },
   "files": [
@@ -62,7 +66,11 @@
     "auth",
     "authentication",
     "middleware",
-    "runes"
+    "runes",
+    "adapter",
+    "prisma",
+    "drizzle",
+    "database"
   ],
   "license": "MIT",
   "repository": {

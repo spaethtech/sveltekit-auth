@@ -37,5 +37,14 @@ export type {
   AuthContext,
   AuthLocals,
   AuthHandle,
-  MiddlewareOptions
+  MiddlewareOptions,
+
+  // Adapter types
+  Adapter,
+  PartialAdapter,
+  AdapterConfig,
+  AdapterUser,
+  AdapterAccount,
+  AdapterSession,
+  VerificationToken
 } from './types.js';
