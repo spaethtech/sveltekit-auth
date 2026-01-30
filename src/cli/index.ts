@@ -14,6 +14,7 @@ import { dirname, resolve } from 'node:path';
 type Database = 'postgres' | 'mysql' | 'sqlite';
 type ORM = 'drizzle' | 'prisma';
 type Casing = 'snake' | 'camel' | 'pascal';
+type IdType = 'uuid' | 'cuid';
 
 interface InitOptions {
   database: Database;
@@ -22,6 +23,7 @@ interface InitOptions {
   tableCasing: Casing;
   columnCasing: Casing;
   pluralTables: boolean;
+  idType: IdType;
   force: boolean;
 }
 
@@ -98,6 +100,7 @@ function parseArgs(args: string[]): InitOptions {
     tableCasing: 'snake',
     columnCasing: 'snake',
     pluralTables: true,
+    idType: 'uuid',
     force: false
   };
 
@@ -146,6 +149,12 @@ function parseArgs(args: string[]): InitOptions {
       case '--singular':
         options.pluralTables = false;
         break;
+      case '--id':
+        if (next && ['uuid', 'cuid'].includes(next)) {
+          options.idType = next as IdType;
+          i++;
+        }
+        break;
       case '--force':
       case '-f':
         options.force = true;
@@ -164,7 +173,7 @@ function parseArgs(args: string[]): InitOptions {
 // Schema Generators
 // =============================================================================
 
-function getDrizzleSchema(database: Database, nm: NameMapper): string {
+function getDrizzleSchema(database: Database, nm: NameMapper, idType: IdType): string {
   const imports = {
     postgres: `import { pgTable, text, timestamp, integer, primaryKey, uniqueIndex } from 'drizzle-orm/pg-core';`,
     mysql: `import { mysqlTable, varchar, text, timestamp, int, primaryKey, uniqueIndex } from 'drizzle-orm/mysql-core';`,
@@ -177,11 +186,20 @@ function getDrizzleSchema(database: Database, nm: NameMapper): string {
     sqlite: 'sqliteTable'
   };
 
-  const textType = database === 'mysql' ? `varchar` : 'text';
   const intType = database === 'mysql' ? 'int' : 'integer';
+
+  // ID generation based on idType
+  const idGenerator = idType === 'cuid'
+    ? `createId()`  // from @paralleldrive/cuid2
+    : `crypto.randomUUID()`;
+
+  const idLength = idType === 'cuid' ? 24 : 36;
+
   const idDef = database === 'mysql'
-    ? `${textType}('${nm.column('id')}', { length: 36 }).primaryKey().$defaultFn(() => crypto.randomUUID())`
-    : `text('${nm.column('id')}').primaryKey().$defaultFn(() => crypto.randomUUID())`;
+    ? `varchar('${nm.column('id')}', { length: ${idLength} }).primaryKey().$defaultFn(() => ${idGenerator})`
+    : `text('${nm.column('id')}').primaryKey().$defaultFn(() => ${idGenerator})`;
+
+  const cuidImport = idType === 'cuid' ? `import { createId } from '@paralleldrive/cuid2';\n` : '';
 
   const timestampDef = (col: string) => {
     if (database === 'sqlite') {
@@ -215,13 +233,14 @@ function getDrizzleSchema(database: Database, nm: NameMapper): string {
  * SvelteKit Auth - Database Schema
  *
  * Generated for: ${database} with Drizzle ORM
+ * ID type: ${idType}
  * Table casing: ${nm.table('user')} (from 'user')
  * Column casing: ${nm.column('userId')} (from 'userId')
  *
  * Modify this file as needed, then run migrations.
  */
 
-${imports[database]}
+${cuidImport}${imports[database]}
 
 export const users = ${tableFunc[database]}('${nm.table('user')}', {
   ${idDef},
@@ -262,7 +281,7 @@ export const sessions = ${tableFunc[database]}('${nm.table('session')}', {
   ${timestampDef('updatedAt')}
 });
 
-export const verificationTokens = ${tableFunc[database]}('${nm.table('verificationToken')}', {
+export const verifications = ${tableFunc[database]}('${nm.table('verification')}', {
   ${textCol('identifier', '.notNull()')},
   ${textCol('token', '.notNull().unique()')},
   ${expiresTimestamp('expires')}
@@ -277,12 +296,12 @@ export type Account = typeof accounts.$inferSelect;
 export type NewAccount = typeof accounts.$inferInsert;
 export type Session = typeof sessions.$inferSelect;
 export type NewSession = typeof sessions.$inferInsert;
-export type VerificationToken = typeof verificationTokens.$inferSelect;
-export type NewVerificationToken = typeof verificationTokens.$inferInsert;
+export type Verification = typeof verifications.$inferSelect;
+export type NewVerification = typeof verifications.$inferInsert;
 `;
 }
 
-function getPrismaSchema(database: Database, nm: NameMapper): string {
+function getPrismaSchema(database: Database, nm: NameMapper, idType: IdType): string {
   const datasource = {
     postgres: 'postgresql',
     mysql: 'mysql',
@@ -305,9 +324,12 @@ function getPrismaSchema(database: Database, nm: NameMapper): string {
     return `  @@map("${dbName}")`;
   };
 
+  const idDefault = idType === 'cuid' ? 'cuid()' : 'uuid()';
+
   return `// SvelteKit Auth - Prisma Schema
 //
 // Generated for: ${database}
+// ID type: ${idType}
 // Table casing: ${nm.table('user')} (from 'user')
 // Column casing: ${nm.column('userId')} (from 'userId')
 //
@@ -321,7 +343,7 @@ function getPrismaSchema(database: Database, nm: NameMapper): string {
 // }
 
 model User {
-  id            String    @id @default(uuid())${mapCol('id')}
+  id            String    @id @default(${idDefault})${mapCol('id')}
   email         String    @unique${mapCol('email')}
   emailVerified DateTime?${mapCol('emailVerified')}
   name          String?${mapCol('name')}
@@ -336,7 +358,7 @@ ${mapTable('user')}
 }
 
 model Account {
-  id                String   @id @default(uuid())${mapCol('id')}
+  id                String   @id @default(${idDefault})${mapCol('id')}
   userId            String${mapCol('userId')}
   type              String${mapCol('type')}
   provider          String${mapCol('provider')}
@@ -357,7 +379,7 @@ ${mapTable('account')}
 }
 
 model Session {
-  id           String   @id @default(uuid())${mapCol('id')}
+  id           String   @id @default(${idDefault})${mapCol('id')}
   sessionToken String   @unique${mapCol('sessionToken')}
   userId       String${mapCol('userId')}
   expires      DateTime${mapCol('expires')}
@@ -369,13 +391,13 @@ model Session {
 ${mapTable('session')}
 }
 
-model VerificationToken {
+model Verification {
   identifier String${mapCol('identifier')}
   token      String   @unique${mapCol('token')}
   expires    DateTime${mapCol('expires')}
 
   @@unique([identifier, token])
-${mapTable('verificationToken')}
+${mapTable('verification')}
 }
 `;
 }
@@ -385,12 +407,13 @@ ${mapTable('verificationToken')}
 // =============================================================================
 
 function init(options: InitOptions): void {
-  const { database, orm, outputDir, tableCasing, columnCasing, pluralTables, force } = options;
+  const { database, orm, outputDir, tableCasing, columnCasing, pluralTables, idType, force } = options;
   const nm = createNameMapper(options);
 
   console.log(`\n🔐 SvelteKit Auth - Schema Setup\n`);
   console.log(`   Database:  ${database}`);
   console.log(`   ORM:       ${orm}`);
+  console.log(`   ID Type:   ${idType}`);
   console.log(`   Tables:    ${tableCasing}${pluralTables ? ' (plural)' : ''}`);
   console.log(`   Columns:   ${columnCasing}`);
   console.log(`   Output:    ${outputDir}${force ? ' (force)' : ''}\n`);
@@ -414,8 +437,8 @@ function init(options: InitOptions): void {
 
   // Generate and write schema content
   const content = orm === 'drizzle'
-    ? getDrizzleSchema(database, nm)
-    : getPrismaSchema(database, nm);
+    ? getDrizzleSchema(database, nm, idType)
+    : getPrismaSchema(database, nm, idType);
 
   const existed = existsSync(outputPath);
   writeFileSync(outputPath, content, 'utf-8');
@@ -459,14 +482,18 @@ Options:
 
   -t, --tables <casing>   Table name casing: snake, camel, pascal (default: snake)
   -c, --columns <casing>  Column name casing: snake, camel, pascal (default: snake)
+      --id <type>         ID generation: uuid, cuid (default: uuid)
       --singular          Use singular table names (user, account, etc.)
   -f, --force             Overwrite existing schema file
 
   -h, --help              Show this help message
 
 Examples:
-  # Default: PostgreSQL + Drizzle with snake_case, plural tables
+  # Default: PostgreSQL + Drizzle with snake_case, plural tables, UUID
   npx @sveltekit-auth/core init
+
+  # Use CUID for IDs
+  npx @sveltekit-auth/core init --id cuid
 
   # MySQL with camelCase columns
   npx @sveltekit-auth/core init -d mysql --columns camel
@@ -474,11 +501,11 @@ Examples:
   # Prisma with snake_case tables and columns
   npx @sveltekit-auth/core init --orm prisma -t snake -c snake
 
-  # Singular table names (user, account, session)
+  # Singular table names (user, account, session, verification)
   npx @sveltekit-auth/core init --singular
 
-  # Everything camelCase
-  npx @sveltekit-auth/core init --tables camel --columns camel
+  # Everything camelCase with CUID
+  npx @sveltekit-auth/core init --tables camel --columns camel --id cuid
 `);
 }
 
