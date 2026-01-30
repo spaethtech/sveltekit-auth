@@ -79,6 +79,7 @@ export interface PrismaClient {
     create: (args: { data: Record<string, unknown> }) => Promise<Record<string, unknown>>;
     findUnique: (args: { where: Record<string, unknown> }) => Promise<Record<string, unknown> | null>;
     findFirst: (args: { where: Record<string, unknown>; include?: Record<string, boolean> }) => Promise<Record<string, unknown> | null>;
+    update: (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<Record<string, unknown>>;
     delete: (args: { where: Record<string, unknown> }) => Promise<Record<string, unknown>>;
     deleteMany: (args: { where: Record<string, unknown> }) => Promise<{ count: number }>;
   };
@@ -194,6 +195,9 @@ export function createPrismaAdapter(prisma: PrismaClient): Adapter {
           type: accountData.type,
           provider: accountData.provider,
           providerAccountId: accountData.providerAccountId,
+          login: accountData.login,
+          loginVerified: accountData.loginVerified,
+          passwordHash: accountData.passwordHash,
           refreshToken: accountData.refreshToken,
           accessToken: accountData.accessToken,
           expiresAt: accountData.expiresAt,
@@ -220,6 +224,27 @@ export function createPrismaAdapter(prisma: PrismaClient): Adapter {
       });
 
       return account as AdapterAccount | null;
+    },
+
+    async getAccountByLogin(provider, login) {
+      const account = await prisma.account.findFirst({
+        where: { provider, login }
+      });
+
+      return account as AdapterAccount | null;
+    },
+
+    async updateAccount(accountId, data) {
+      try {
+        const account = await prisma.account.update({
+          where: { id: accountId },
+          data
+        });
+
+        return account as unknown as AdapterAccount;
+      } catch {
+        return null;
+      }
     },
 
     // -------------------------------------------------------------------------

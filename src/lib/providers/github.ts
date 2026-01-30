@@ -63,8 +63,18 @@ export interface GitHubProfile extends Profile {
  * })
  * ```
  */
-export function GitHub(config: GitHubConfig): OAuthProviderConfig {
+export function GitHub(config: GitHubConfig): OAuthProviderConfig<Profile> {
   const scope = config.scope ?? 'read:user user:email';
+
+  const defaultProfile = (profile: Profile) => {
+    const ghProfile = profile as GitHubProfile;
+    return {
+      id: String(ghProfile.id),
+      name: ghProfile.name ?? ghProfile.login,
+      email: ghProfile.email,
+      image: ghProfile.avatar_url
+    };
+  };
 
   return {
     id: 'github',
@@ -78,16 +88,8 @@ export function GitHub(config: GitHubConfig): OAuthProviderConfig {
     },
     token: 'https://github.com/login/oauth/access_token',
     userinfo: 'https://api.github.com/user',
-    profile:
-      config.profile ??
-      ((profile: Profile) => {
-        const ghProfile = profile as GitHubProfile;
-        return {
-          id: String(ghProfile.id),
-          name: ghProfile.name ?? ghProfile.login,
-          email: ghProfile.email,
-          image: ghProfile.avatar_url
-        };
-      })
+    profile: config.profile
+      ? (profile, tokens) => config.profile!(profile as GitHubProfile, tokens)
+      : defaultProfile
   };
 }

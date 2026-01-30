@@ -95,7 +95,7 @@ export async function setSessionCookie(
   session: Session,
   config: ResolvedAuthConfig
 ): Promise<void> {
-  const maxAge = config.session.maxAge;
+  const maxAge = config.session.maxAge ?? 30 * 24 * 60 * 60; // 30 days default
   const token = await encodeSession(session, config.secret, maxAge);
 
   cookies.set(config.cookies.name, token, {

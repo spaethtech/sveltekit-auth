@@ -31,7 +31,7 @@ async function getOrCreateUser(
   profile?: Profile
 ): Promise<AdapterUser> {
   // Try to find existing user by account
-  if (adapter.getUserByAccount) {
+  if (adapter.getUserByAccount && account.providerAccountId) {
     const existingUser = await adapter.getUserByAccount({
       provider: account.provider,
       providerAccountId: account.providerAccountId
@@ -49,17 +49,19 @@ async function getOrCreateUser(
     if (existingUser) {
       // Link account to existing user
       if (adapter.linkAccount) {
+        const login = user.email ?? account.providerAccountId ?? user.id;
         await adapter.linkAccount({
           userId: existingUser.id,
           provider: account.provider,
           providerAccountId: account.providerAccountId,
+          login,
           type: account.type,
-          accessToken: account.accessToken ?? null,
-          refreshToken: account.refreshToken ?? null,
-          expiresAt: account.expiresAt ?? null,
-          tokenType: account.tokenType ?? null,
-          scope: account.scope ?? null,
-          idToken: account.idToken ?? null
+          accessToken: account.accessToken,
+          refreshToken: account.refreshToken,
+          expiresAt: account.expiresAt,
+          tokenType: account.tokenType,
+          scope: account.scope,
+          idToken: account.idToken
         });
       }
 
@@ -78,17 +80,19 @@ async function getOrCreateUser(
 
     // Link account to new user
     if (adapter.linkAccount) {
+      const newLogin = user.email ?? account.providerAccountId ?? user.id;
       await adapter.linkAccount({
         userId: newUser.id,
         provider: account.provider,
         providerAccountId: account.providerAccountId,
+        login: newLogin,
         type: account.type,
-        accessToken: account.accessToken ?? null,
-        refreshToken: account.refreshToken ?? null,
-        expiresAt: account.expiresAt ?? null,
-        tokenType: account.tokenType ?? null,
-        scope: account.scope ?? null,
-        idToken: account.idToken ?? null
+        accessToken: account.accessToken,
+        refreshToken: account.refreshToken,
+        expiresAt: account.expiresAt,
+        tokenType: account.tokenType,
+        scope: account.scope,
+        idToken: account.idToken
       });
     }
 
@@ -314,8 +318,9 @@ async function handleSignIn(
       }
     }
 
-    // Create session
-    const session = createSession(finalUser, config.session.maxAge);
+    // Create session (default maxAge: 30 days)
+    const maxAge = config.session.maxAge ?? 30 * 24 * 60 * 60;
+    const session = createSession(finalUser, maxAge);
     await setSessionCookie(event.cookies, session, config);
 
     // Redirect to callback URL or home
@@ -521,13 +526,13 @@ async function handleOAuthCallback(
     }
 
     // Transform profile to user
-    const user = oauth.profile
+    const user: User = oauth.profile
       ? await oauth.profile(profile, tokenSet)
       : {
-          id: profile.sub ?? profile.id ?? '',
+          id: String(profile.sub ?? profile.id ?? ''),
           name: profile.name,
           email: profile.email,
-          image: profile.image ?? profile.picture ?? profile.avatar_url
+          image: (profile.image ?? (profile.picture as string | undefined) ?? (profile.avatar_url as string | undefined)) as string | null | undefined
         };
 
     // Create account info
@@ -585,8 +590,9 @@ async function handleOAuthCallback(
       }
     }
 
-    // Create session
-    const session = createSession(finalUser, config.session.maxAge);
+    // Create session (default maxAge: 30 days)
+    const oauthMaxAge = config.session.maxAge ?? 30 * 24 * 60 * 60;
+    const session = createSession(finalUser, oauthMaxAge);
     session.accessToken = tokenSet.accessToken;
     session.refreshToken = tokenSet.refreshToken;
 

@@ -74,8 +74,18 @@ function getDiscordAvatarUrl(profile: DiscordProfile): string | null {
  * })
  * ```
  */
-export function Discord(config: DiscordConfig): OAuthProviderConfig {
+export function Discord(config: DiscordConfig): OAuthProviderConfig<Profile> {
   const scope = config.scope ?? 'identify email';
+
+  const defaultProfile = (profile: Profile) => {
+    const discordProfile = profile as DiscordProfile;
+    return {
+      id: discordProfile.id,
+      name: discordProfile.global_name ?? discordProfile.username,
+      email: discordProfile.email ?? null,
+      image: getDiscordAvatarUrl(discordProfile)
+    };
+  };
 
   return {
     id: 'discord',
@@ -89,16 +99,8 @@ export function Discord(config: DiscordConfig): OAuthProviderConfig {
     },
     token: 'https://discord.com/api/oauth2/token',
     userinfo: 'https://discord.com/api/users/@me',
-    profile:
-      config.profile ??
-      ((profile: Profile) => {
-        const discordProfile = profile as DiscordProfile;
-        return {
-          id: discordProfile.id,
-          name: discordProfile.global_name ?? discordProfile.username,
-          email: discordProfile.email ?? null,
-          image: getDiscordAvatarUrl(discordProfile)
-        };
-      })
+    profile: config.profile
+      ? (profile, tokens) => config.profile!(profile as DiscordProfile, tokens)
+      : defaultProfile
   };
 }

@@ -7,6 +7,34 @@
 // Main middleware and configuration
 export { createAuth, createProtectedRoutesMiddleware, sequence, resolveConfig } from './middleware/index.js';
 
+// Authentication flows
+export {
+  // Email verification
+  createVerification,
+  verifyToken,
+  isLoginVerified,
+  resendVerification,
+  type VerificationConfig,
+  type CreateVerificationResult,
+
+  // Password reset
+  createPasswordReset,
+  verifyResetToken,
+  resetPassword,
+  validatePassword,
+  type PasswordResetConfig,
+  type CreateResetResult
+} from './flows/index.js';
+
+// Password utilities
+export {
+  hashPassword,
+  verifyPassword,
+  needsRehash,
+  generateToken,
+  type HashOptions
+} from './utils/password.js';
+
 // Types
 export type {
   // Core types
@@ -17,6 +45,7 @@ export type {
   Profile,
   Credentials,
   TokenSet,
+  LoginType,
 
   // Provider types
   AuthProvider,

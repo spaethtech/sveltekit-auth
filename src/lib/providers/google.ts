@@ -48,8 +48,18 @@ export interface GoogleProfile extends Profile {
  * })
  * ```
  */
-export function Google(config: GoogleConfig): OAuthProviderConfig {
+export function Google(config: GoogleConfig): OAuthProviderConfig<Profile> {
   const scope = config.scope ?? 'openid email profile';
+
+  const defaultProfile = (profile: Profile) => {
+    const googleProfile = profile as GoogleProfile;
+    return {
+      id: googleProfile.sub,
+      name: googleProfile.name,
+      email: googleProfile.email,
+      image: googleProfile.picture
+    };
+  };
 
   return {
     id: 'google',
@@ -68,16 +78,8 @@ export function Google(config: GoogleConfig): OAuthProviderConfig {
     token: 'https://oauth2.googleapis.com/token',
     userinfo: 'https://openidconnect.googleapis.com/v1/userinfo',
     issuer: 'https://accounts.google.com',
-    profile:
-      config.profile ??
-      ((profile: Profile) => {
-        const googleProfile = profile as GoogleProfile;
-        return {
-          id: googleProfile.sub,
-          name: googleProfile.name,
-          email: googleProfile.email,
-          image: googleProfile.picture
-        };
-      })
+    profile: config.profile
+      ? (profile, tokens) => config.profile!(profile as GoogleProfile, tokens)
+      : defaultProfile
   };
 }

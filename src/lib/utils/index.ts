@@ -27,3 +27,11 @@ export {
   refreshSession,
   defaultCookieConfig
 } from './session.js';
+
+export {
+  hashPassword,
+  verifyPassword,
+  needsRehash,
+  generateToken,
+  type HashOptions
+} from './password.js';

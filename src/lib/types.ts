@@ -37,7 +37,7 @@ export interface SessionData {
  */
 export interface Account {
   provider: string;
-  providerAccountId: string;
+  providerAccountId?: string;
   type: 'oauth' | 'credentials' | 'email';
   accessToken?: string;
   refreshToken?: string;
@@ -51,7 +51,7 @@ export interface Account {
  * Profile information returned from OAuth providers
  */
 export interface Profile {
-  id?: string;
+  id?: string | number;
   sub?: string;
   name?: string | null;
   email?: string | null;
@@ -90,7 +90,7 @@ export interface ProviderConfig {
 /**
  * OAuth provider configuration
  */
-export interface OAuthProviderConfig extends ProviderConfig {
+export interface OAuthProviderConfig<P extends Profile = Profile> extends ProviderConfig {
   type: 'oauth';
   clientId: string;
   clientSecret: string;
@@ -100,7 +100,7 @@ export interface OAuthProviderConfig extends ProviderConfig {
   issuer?: string;
   wellKnown?: string;
   checks?: ('state' | 'pkce' | 'nonce')[];
-  profile?: (profile: Profile, tokens: TokenSet) => User | Promise<User>;
+  profile?: (profile: P, tokens: TokenSet) => User | Promise<User>;
 }
 
 /**
@@ -156,12 +156,12 @@ export interface AuthProvider {
 /**
  * OAuth authentication provider
  */
-export interface OAuthProvider extends AuthProvider {
+export interface OAuthProvider<P extends Profile = Profile> extends AuthProvider {
   type: 'oauth';
   authorization: string | { url: string; params?: Record<string, string> };
   token: string | { url: string; params?: Record<string, string> };
   userinfo?: string | { url: string };
-  profile: (profile: Profile, tokens: TokenSet) => User | Promise<User>;
+  profile: (profile: P, tokens: TokenSet) => User | Promise<User>;
 }
 
 /**
@@ -225,7 +225,7 @@ export interface AuthConfig {
   /**
    * Authentication providers
    */
-  providers: (OAuthProviderConfig | CredentialsProviderConfig)[];
+  providers: (OAuthProviderConfig<Profile> | CredentialsProviderConfig)[];
 
   /**
    * Secret used to sign tokens and encrypt data
@@ -396,18 +396,21 @@ export interface AdapterUser extends User {
  * Account model for database adapters
  * Links OAuth/credentials accounts to users
  */
-export interface AdapterAccount extends Account {
+export interface AdapterAccount {
   id: string;
   userId: string;
   provider: string;
-  providerAccountId: string;
+  providerAccountId?: string;
+  login: string;
+  loginVerified?: Date | null;
+  passwordHash?: string | null;
   type: 'oauth' | 'credentials' | 'email';
-  accessToken?: string | null;
-  refreshToken?: string | null;
-  expiresAt?: number | null;
-  tokenType?: string | null;
-  scope?: string | null;
-  idToken?: string | null;
+  accessToken?: string;
+  refreshToken?: string;
+  expiresAt?: number;
+  tokenType?: string;
+  scope?: string;
+  idToken?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -507,6 +510,22 @@ export interface Adapter {
     provider: string;
     providerAccountId: string;
   }): Promise<AdapterAccount | null>;
+
+  /**
+   * Get an account by provider and login identifier
+   */
+  getAccountByLogin?(
+    provider: string,
+    login: string
+  ): Promise<AdapterAccount | null>;
+
+  /**
+   * Update an account
+   */
+  updateAccount?(
+    accountId: string,
+    data: Partial<Pick<AdapterAccount, 'passwordHash' | 'loginVerified' | 'accessToken' | 'refreshToken' | 'expiresAt'>>
+  ): Promise<AdapterAccount | null>;
 
   // -------------------------------------------------------------------------
   // Session Methods (for database session strategy)

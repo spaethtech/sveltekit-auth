@@ -265,6 +265,9 @@ export function createDrizzleAdapter(config: DrizzleAdapterConfig): Adapter {
           type: accountData.type,
           provider: accountData.provider,
           providerAccountId: accountData.providerAccountId,
+          login: accountData.login,
+          loginVerified: accountData.loginVerified,
+          passwordHash: accountData.passwordHash,
           refreshToken: accountData.refreshToken,
           accessToken: accountData.accessToken,
           expiresAt: accountData.expiresAt,
@@ -311,7 +314,41 @@ export function createDrizzleAdapter(config: DrizzleAdapterConfig): Adapter {
           )
         );
 
-      return (account as AdapterAccount) ?? null;
+      return (account as unknown as AdapterAccount) ?? null;
+    },
+
+    async getAccountByLogin(provider, login) {
+      const accounts = schema.accounts as {
+        provider: unknown;
+        login: unknown;
+      };
+
+      const [account] = await db
+        .select()
+        .from(schema.accounts)
+        .where(
+          and(
+            eq(accounts.provider, provider),
+            eq(accounts.login, login)
+          )
+        );
+
+      return (account as unknown as AdapterAccount) ?? null;
+    },
+
+    async updateAccount(accountId, data) {
+      const accounts = schema.accounts as { id: unknown };
+
+      const [account] = await db
+        .update(schema.accounts)
+        .set({
+          ...data,
+          updatedAt: helpers.now()
+        })
+        .where(eq(accounts.id, accountId))
+        .returning();
+
+      return (account as unknown as AdapterAccount) ?? null;
     },
 
     // -------------------------------------------------------------------------
