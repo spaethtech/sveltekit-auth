@@ -1,27 +1,44 @@
 /**
  * Drizzle ORM adapter for sveltekit-auth
  *
- * Requires the following Drizzle schema:
+ * Generate the required schema using the CLI:
+ * ```bash
+ * npx sveltekit-auth init -d postgres
+ * ```
+ *
+ * This creates two files in `src/lib/server/schemas/`:
+ * - `users.ts` - User model (extendable with custom fields)
+ * - `auth.ts` - Internal auth tables (accounts, sessions, verifications)
+ *
+ * Example schema (PostgreSQL with Drizzle):
  *
  * ```ts
- * import { pgTable, text, timestamp, integer, primaryKey } from 'drizzle-orm/pg-core';
+ * // users.ts
+ * import { pgTable, text, timestamp } from 'drizzle-orm/pg-core';
  *
- * export const users = pgTable('user', {
+ * export const users = pgTable('users', {
  *   id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
- *   email: text('email').notNull().unique(),
- *   emailVerified: timestamp('email_verified', { mode: 'date' }),
  *   name: text('name'),
+ *   email: text('email'),
  *   image: text('image'),
  *   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
  *   updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull()
+ *   // Add your custom fields here
  * });
  *
- * export const accounts = pgTable('account', {
+ * // auth.ts
+ * import { pgTable, text, timestamp, integer, uniqueIndex } from 'drizzle-orm/pg-core';
+ * import { users } from './users.js';
+ *
+ * export const accounts = pgTable('accounts', {
  *   id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
  *   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
- *   type: text('type').notNull(),
+ *   type: text('type').$type<'oauth' | 'credentials' | 'email'>().notNull(),
  *   provider: text('provider').notNull(),
- *   providerAccountId: text('provider_account_id').notNull(),
+ *   providerAccountId: text('provider_account_id'),
+ *   login: text('login').notNull(),
+ *   loginVerified: timestamp('login_verified', { mode: 'date' }),
+ *   passwordHash: text('password_hash'),
  *   refreshToken: text('refresh_token'),
  *   accessToken: text('access_token'),
  *   expiresAt: integer('expires_at'),
@@ -30,9 +47,11 @@
  *   idToken: text('id_token'),
  *   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
  *   updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull()
- * });
+ * }, (table) => [
+ *   uniqueIndex('accounts_provider_login_idx').on(table.provider, table.login)
+ * ]);
  *
- * export const sessions = pgTable('session', {
+ * export const sessions = pgTable('sessions', {
  *   id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
  *   sessionToken: text('session_token').notNull().unique(),
  *   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -41,13 +60,13 @@
  *   updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull()
  * });
  *
- * export const verificationTokens = pgTable('verification_token', {
+ * export const verifications = pgTable('verifications', {
  *   identifier: text('identifier').notNull(),
  *   token: text('token').notNull().unique(),
  *   expires: timestamp('expires', { mode: 'date' }).notNull()
- * }, (table) => ({
- *   pk: primaryKey({ columns: [table.identifier, table.token] })
- * }));
+ * }, (table) => [
+ *   uniqueIndex('verifications_identifier_token_idx').on(table.identifier, table.token)
+ * ]);
  * ```
  */
 
@@ -98,7 +117,7 @@ export interface DrizzleSchema {
   users: unknown;
   accounts: unknown;
   sessions: unknown;
-  verificationTokens: unknown;
+  verifications: unknown;
 }
 
 /**
@@ -421,7 +440,7 @@ export function createDrizzleAdapter(config: DrizzleAdapterConfig): Adapter {
 
     async createVerificationToken(token) {
       const [verificationToken] = await db
-        .insert(schema.verificationTokens)
+        .insert(schema.verifications)
         .values({
           identifier: token.identifier,
           token: token.token,
@@ -433,13 +452,13 @@ export function createDrizzleAdapter(config: DrizzleAdapterConfig): Adapter {
     },
 
     async useVerificationToken({ identifier, token }) {
-      const tokens = schema.verificationTokens as {
+      const tokens = schema.verifications as {
         identifier: unknown;
         token: unknown;
       };
 
       const [verificationToken] = await db
-        .delete(schema.verificationTokens)
+        .delete(schema.verifications)
         .where(and(eq(tokens.identifier, identifier), eq(tokens.token, token)))
         .returning();
 

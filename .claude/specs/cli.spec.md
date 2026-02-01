@@ -16,7 +16,7 @@ npx sveltekit-auth init [options]
 |--------|--------|---------|-------------|
 | `--database`, `-d` | `postgres`, `mysql`, `sqlite` | `postgres` | Target database |
 | `--orm`, `-o` | `drizzle`, `prisma` | `drizzle` | ORM to generate for |
-| `--output`, `-O` | path | `src/lib/server/schemas/` | Output directory |
+| `--output`, `-o` | path | `src/lib/server/schemas/` | Output directory |
 | `--tables`, `-t` | `snake`, `camel`, `pascal` | `snake` | Table naming convention |
 | `--columns`, `-c` | `snake`, `camel` | `snake` | Column naming convention |
 | `--id` | `uuid`, `cuid` | `uuid` | ID generation strategy |
